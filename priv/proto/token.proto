@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package we.id2.token;
+option java_package = "co.we.id.token.proto";
+option java_multiple_files = true;
+option go_package = "token";
+option optimize_for = SPEED;
+
+/*
+ * A container for a block of binary data and a digital signature to prove
+ * authenticity.
+ */
+message SignedData {
+  /*
+   * Required. The data payload.
+   */
+  bytes data = 1;
+
+  /*
+   * Required. The data signature.
+   */
+  bytes signature = 2;
+}
+
+/*
+ * The data structure used for authorization tokens. In the somewhat simplified
+ * model of authN/Z in this experiment, tokens primarily identify the principal
+ * they represent, their intended category of usage (the type), and if/when
+ * they expire.
+ */
+message Token {
+  enum TokenType {
+    /*
+     * An unknown token type. This value is defined to avoid overlap between
+     * the "default" value for fields of this type and explicitly defined
+     * token type values. Any token with this type MUST be treated as invalid.
+     */
+    UNKNOWN = 0;
+
+    /*
+     * An OAuth2 refresh token. Should only be communicated between the
+     * client agent and the token exchange endpoint. Tokens of this type do not
+     * expire, but can be revoked out-of-band. Can be used to create new
+     * access tokens, if still valid. Cannot be used for anything else.
+     */
+    OAUTH2_REFRESH = 1;
+
+    /*
+     * An OAuth2 access token. Should only be communicated between the
+     * client agent and the token exchange endpoint or API gateway. Expires,
+     * but cannot be revoked before expiration.
+     */
+    OAUTH2_ACCESS = 2;
+
+    /*
+     * An action token. Should only be communicated between backend services,
+     * And only pertaining to a single logical "action" as a result of an
+     * API call from an agent. Very short lived.
+     */
+    ACTION = 3;
+  }
+
+  /**
+   * Required. The UUID for this token.
+   */
+  bytes token_uuid = 1;
+
+  /**
+   * Required. The UUID for the principal this token provides authorization
+   * for.
+   */
+  bytes principal_uuid = 2;
+
+  /**
+   * Required. The type of the token. If UNKNOWN, this token MUST be treated
+   * as invalid.
+   */
+  TokenType type = 3;
+
+  /**
+   * Optional. The time, since the UNIX epoch in milliseconds, that this token
+   * will expire. If the current time is greater than or equal to this time,
+   * the token should be considered invalid. If no expiration time is set,
+   * the token does not expire.
+   */
+  int64 expires_at = 4;
+}

@@ -1,0 +1,226 @@
+syntax = "proto3";
+
+package we.id2.tokenmint;
+option java_package = "co.we.id.tokenmint.proto";
+option java_multiple_files = true;
+option go_package = "service";
+option optimize_for = SPEED;
+
+import "google/api/annotations.proto";
+import "google/protobuf/empty.proto";
+import "validator.proto";
+
+/*
+ * A service which produces (mints, like coins) bearer tokens that authorize 
+ * access to systems, bound to a authentication principal. This service is not 
+ * responsible for authenticating principals prior to issuing tokens; it will 
+ * blindly mint tokens based on an asserted principal identifier (UUID). As 
+ * such, the ability to invoke the RPCs defined by this service should be 
+ * restricted to a very small whitelist of other services, typically within the
+ * WeID system.
+ *
+ * Three categories of tokens can be minted by the service:
+ * - OAuth2 refresh tokens: These tokens provide a long-lived authorization
+ *   for an agent that represents the principal. They must be "exchanged" for 
+ *   an OAuth2 access token before an API endpoint can be invoked. Refresh
+ *   tokens can be revoked, if it is suspected that they have leaked.
+ *
+ * - OAuth2 access tokens: These tokens provide a short-lived authorization
+ *   for an agent to invoke an API endpoint on behalf of a principal. These
+ *   tokens expire after a fixed period of time, forcing the agent to
+ *   periodically exchange the refresh token for a new access token.
+ *
+ * - Action tokens: These tokens represent a principal's authorization within
+ *   the context of a single API call. Access tokens are exchanged for
+ *   action tokens at the API gateway, and are passed around between 
+ *   internal systems. This prevents accidental logging or theft of user
+ *   access tokens within our systems, and as these tokens expire very quickly,
+ *   theft via logs or other mechanisms poses less of a threat.
+ *
+ * The service also provides the facility to revoke refresh tokens and
+ * to introspect tokens.
+ */
+service TokenMint {
+
+    /*
+     * Mints a refresh token to represent a specified principal.
+     */
+    rpc MintRefreshToken (MintRefreshTokenRequest) returns (MintRefreshTokenResponse) {
+        option (google.api.http) = {
+          post: "/v1/tokens/refresh"
+        };
+    }
+
+    /*
+     * Mints an access token, given a refresh token. If the refresh token has
+     * been revoked, the request will be rejected with status INVALID_ARGUMENT.
+     */
+    rpc MintAccessToken (MintAccessTokenRequest) returns (MintAccessTokenResponse) {
+        option (google.api.http) = {
+          post: "/v1/tokens/access"
+        };
+    }
+
+    /*
+     * Mints an action token, given an access token. If the access token has
+     * expired, the request will be rejected with status INVALID_ARGUMENT.
+     */
+    rpc MintActionToken (MintActionTokenRequest) returns (MintActionTokenResponse) {
+        option (google.api.http) = {
+          post: "/v1/tokens/action"
+        };
+    }
+
+    /*
+     * Provides information on a token.
+     */
+    rpc GetTokenInfo (GetTokenInfoRequest) returns (GetTokenInfoResponse) {
+        option (google.api.http) = {
+          post: "/v1/tokens:info"
+        };
+    }
+
+    /*
+     * Revokes a refresh token, either from the raw token value or by the token's
+     * UUID. If no token can be found given a UUID, the request will be rejected
+     * with status INVALID_ARGUMENT.
+     */
+    rpc RevokeRefreshToken (RevokeRefreshTokenRequest) returns (google.protobuf.Empty) {
+        option (google.api.http) = {
+            delete: "/v1/tokens/{token_uuid}"
+        };
+    }
+}
+
+message MintRefreshTokenRequest {
+    /* 
+     * Required. The principal to which the requested refresh token should be 
+     * associated. Must be exactly 16 bytes long.
+     */
+    bytes principal_uuid = 1 [(validator.field) = {length_eq : 16}];
+}
+
+message MintRefreshTokenResponse {
+    /*
+     * Required. The minted refresh token. The length of a refresh token is
+     * dynamic, and may be up to 16KB in length.
+     */
+    string refresh_token = 1; 
+}
+
+message MintAccessTokenRequest {
+    /*
+     * Required. The refresh token from which the access token should be
+     * derived.
+     */
+    string refresh_token = 1 [(validator.field) = {string_not_empty : true}];
+}
+
+message MintAccessTokenResponse {
+    /**
+     * Required. The minted access token. The length of an access token is
+     * dynamic, and may be up to 16KB in length.
+     */
+    string access_token = 1;
+}
+
+message MintActionTokenRequest {
+    /**
+     * Required. The access token from which the action token should be
+     * derived.
+     */
+    string access_token = 1 [(validator.field) = {string_not_empty : true}];
+}
+
+message MintActionTokenResponse {
+    /**
+     * Required. The minted action token. The length of action tokens is
+     * dynamic, and may be up to 64KB in length.
+     */
+    string action_token = 1;
+}
+
+message GetTokenInfoRequest {
+    /*
+     * Required. The token to be described.
+     */
+    string token = 1 [(validator.field) = {string_not_empty : true}];
+}
+
+message GetTokenInfoResponse {
+    enum TokenType {
+        /*
+         * An unknown token type (the default value). Tokens of this type, if 
+         * encountered, must be treated as invalid and confer no access.
+         */
+        UNKNOWN = 0;
+
+        /*
+         * An OAuth2 refresh token. Long lived, on the order of years. Can only 
+         * be used to produce new access tokens. Can be revoked.
+         */
+        OAUTH2_REFRESH = 1;
+
+        /*
+         * An OAuth2 access token. Short lived, on the order of hours. Used by 
+         * the external agent as their authorization to invoke actions on 
+         * services. Used to produce action tokens for chained RPCs once within
+         * the service network. Cannot be revoked.
+         */
+        OAUTH2_ACCESS = 2;
+
+        /*
+         * An internal action token. Very short lived - should only be used for 
+         * a single end user request, and then discarded.
+         */
+        ACTION = 3;
+    }
+
+    /*
+     * Required. The unique ID of the token.
+     */
+    bytes token_uuid = 1;
+
+    /*
+     * Required. The token type, indicating the scenarios in which it can be 
+     * used and accepted.
+     */
+    TokenType type = 2;
+
+    /* 
+     * Whether the token is still valid.
+     */
+    bool valid = 3;
+
+    /*
+     * The time at which the token was issued, as milliseconds since the UNIX
+     * epoch.
+     */
+    int64 issued_at = 4;
+
+    /*
+     * The time at which the token expires, as milliseconds since the UNIX
+     * epoch. If zero, the token does not expire.
+     */
+    int64 expires_at = 5;
+
+    /*
+     * The principal associated with this token.
+     */
+    bytes principal_uuid = 6;
+}
+
+message RevokeRefreshTokenRequest {
+  oneof token_ref {
+    /*
+     * The UUID of the refresh token to be revoked.
+     */
+    bytes token_uuid = 1 [(validator.field) = {length_eq : 16}];
+
+    /*
+     * The actual token to be revoked.
+     */
+    string token = 2 [(validator.field) = {string_not_empty : true}];
+
+  }
+}
